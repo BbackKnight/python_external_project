@@ -5,3 +5,4 @@
 
 if __name__ == '__main__':
     print(f'I am ok, hello world!')
+    print(f'test 2 merge')
