@@ -38,6 +38,10 @@ class AsyncSpider(object):
         self.header = {'user_agent': self.user_agent}
         self.session = aiohttp.ClientSession()
 
+    async def gen_proxy(self):
+        while True:
+            yield ""
+
     def run(self):
         """
 
@@ -45,7 +49,7 @@ class AsyncSpider(object):
         """
         self.logger = _get_logger(f"{self.name}", self.log_level)
         print("""\033[0;32m
-        _____ _  Author: Jannchie         __
+   _____ _  Author: Jannchie         __
   / ___/(_)___ ___  ____  __  ______/ /__  _____
   \__ \/ / __ `__ \/ __ \/ / / / __  / _ \/ ___/
  ___/ / / / / / / / /_/ / /_/ / /_/ /  __/ /
@@ -54,7 +58,10 @@ class AsyncSpider(object):
         self.logger.critical(f"user_agent: {self.user_agent}")
         self.logger.critical(f"concurrency: {self.concurrency}")
         self.logger.critical(f"interval: {self.interval}")
-
+        self.proxy_gener = self.gen_proxy()
+        self.loop = asyncio.get_event_loop()
+        self.loop.run_until_complete(self._run())
+        self.loop.close()
 
 
 if __name__ == '__main__':
