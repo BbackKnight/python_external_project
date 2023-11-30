@@ -16,6 +16,64 @@ from simpyder.utils import _get_logger
 from simpyder.__version__ import __VERSION__
 
 
+class ParseThread(threading.Thread):
+    def __init__(self, name, url_queue, queueLock, get_response, parse, save, except_queue, item_queue, meta, config):
+        """
+
+        :param name:
+        :param url_queue:
+        :param queueLock:
+        :param get_response:
+        :param parse:
+        :param save:
+        :param except_queue:
+        :param item_queue:
+        :param meta:
+        :param config:
+        """
+        threading.Thread.__init__(self, target=self.run)
+        self.name = name
+        self.url_queue = url_queue
+        self.queueLock = queueLock
+        self.get_response = get_response
+        self.parse = parse
+        self.save = save
+        self.item_queue = item_queue
+        self.logger = _get_logger(self.name, config.LOG_LEVEL)
+        self.meta = meta
+
+    def run(self) -> None:
+        while True:
+            try:
+                sleep(self.meta['download_interval'])
+                self.queueLock.acquire()
+                if not self.url_queue.empty():
+                    url = self.url_queue.get()
+                    self.meta['link_count'] += 1
+                else:
+                    url = None
+                self.queueLock.release()
+
+                if url is None:
+                    sleep(1)
+                    continue
+                self.logger.info(f"开始爬虫 {url}")
+                response = self.get_response(url)
+
+                try:
+                    item = self.parse(response)
+                except Exception as e:
+                    self.logger.exception(e)
+                    continue
+                self.item_queue.put(item)
+                datetime.timedelta(1)
+            except NotImplementedError as e:
+                self.logger.exception(e)
+                return
+            except Exception as e:
+                self.logger.exception(e)
+
+
 class Spider(object):
     def __init__(self, name: str = "Simpyder", gen_url=None, parse=None, save=None, config=SimpyderConfig()):
         """
@@ -93,6 +151,91 @@ class Spider(object):
         """
         self.config = config
 
+    def __get_info(self, ):
+        log = _get_logger(f"{self.name} - 子进程 - INFO", self.config.LOG_LEVEL)
+        history = []
+        interval = 5
+        while True:
+            c_time = datetime.datetime.now()
+            history.append(
+                (c_time, self.meta.get('link_count'), self.meta.get('item_count'))
+            )
+            if len(history) > 60:
+                history = history[-60:]
+            if (c_time - self.meta.get('start_time')).total_seconds() % interval < 1 < len(history):
+                delta_link = (history[-interval + 1][1] - history[0][1]) * 60 / \
+                             ((history[-interval + 1][0] - history[0][0]).total_seconds() + 1)
+                delta_item = (history[-interval + 1][2] - history[0][2]) * 60 / \
+                             ((history[-interval + 1][0] - history[0][0]).total_seconds() + 1)
+                if self.config.DOWNLOAD_INTERVAL == 0:
+                    load = 100
+                else:
+                    load = int(
+                        (history[-1][1] - history[0][1]) * 60 /
+                        (history[-1][0] - history[0][0]).total_seconds() / (
+                                60 / (self.config.DOWNLOAD_INTERVAL / self.config.PARSE_THREAD_NUMER)) * 100
+
+                    )
+
+                result = {'computer_name': socket.gethostname(),
+                          'spider_name': self.start_time,
+                          'start_time': self.start_time,
+                          'update_time': datetime.datetime.now(),
+                          'load': load,
+                          'delta_link': delta_link,
+                          'delta_item': delta_item
+                          }
+                log.info(f"正在爬取第{self.meta.get('link_count')}个链接【{int(delta_link)}/min, 负载{load}%】, "
+                         f"共产生{self.meta.get('item_count')}个对象【{int(delta_item)}/min.】")
+                sleep(1)
+
+    def get(self, url):
+        response = self.session.get(url, headers=self.headers)
+        if 'html' in response.headers['content-type']:
+            response.xpath = HTML(response.text).xpath
+        return response
+
+    def gen_url(self):
+        self.except_queue.put(f"未实现方法： gen_rul(), 无法开启爬虫任务。")
+        yield None
+
+    def get_response(self, url):
+        return self.get(url)
+
+    def parse(self, response):
+        self.logger.critical(f"未实现方法：parse()，将直接返回Response对象")
+        return response
+
+    def save(self, item):
+        self.logger.critical(f"未实现方法：save()， 将直接打印爬虫内容")
+        return item
+
+    def __run_save(self):
+        """
+
+        :return:
+        """
+        logger = _get_logger(f"{self.name} - 子线程 - SAVE", self.config.LOG_LEVEL)
+        count = 0
+        while True:
+            if not self.item_queue.empty():
+                count = 0
+                self._saving = True
+                try:
+                    item = self.item_queue.get()
+                    if item is not None or item is False:
+                        continue
+                    logger.info(item)
+                    item = self.save(item)
+                    self.meta['item_count'] += 1
+                    if self._finish is True:
+                        return
+                except Exception as e:
+                    self.logger.exception(e)
+            else:
+                self._saving = False
+                sleep(1)
+
     def run(self):
         """
         运行
@@ -114,6 +257,132 @@ class Spider(object):
         )
 
         self.__apply_config()
+        self.logger.critical(f"Simpyder ver.{__VERSION__}")
+        self.logger.critical(f"启动爬虫任务")
+        meta = {
+            'link_count': 0,
+            'item_count': 0,
+            'thread_number': self.config.PARSE_THREAD_NUMER,
+            'download_interval': self.config.DOWNLOAD_INTERVAL,
+            'start_time': self.start_time
+        }
+        self.meta = meta
+        info_thread = threading.Thread(target=self.__get_info, name=f"状态打印线程")
+        info_thread.setDaemon(True)
+        info_thread.start()
+
+        save_thread = threading.Thread(target=self.__run_save, name=f"保存项目线程")
+        save_thread.setDaemon(True)
+        save_thread.start()
+
+        for i in range(self.PARSE_THREAD_NUMER):
+            self.threads.append(
+                self.ParseThread(
+                    f"{self.name} - 子线程 - No.{i}",
+                    self.url_queue,
+                    self.queueLock,
+                    self.get_response,
+                    self.parse,
+                    self.save,
+                    self.except_queue,
+                    self.item_queue,
+                    meta,
+                    self.config
+                )
+            )
+
+        for each_thread in self.threads:
+            each_thread.setDaemon(True)
+            each_thread.start()
+
+        url_gener = self.gen_url()
+        for each_url in url_gener:
+            self.queueLock.acquire()
+            while self.url_queue.full():
+                if self.queueLock.locked():
+                    self.logger.info(f"队列满： {each_url}")
+                    self.queueLock.release()
+                sleep(0.1)
+            self.logger.info(f"加入待爬： {each_url}")
+
+            if self.queueLock.locked():
+                self.queueLock.release()
+
+            self.queueLock.acquire()
+            self.url_queue.put(each_url)
+            self.queueLock.release()
+
+        self.logger.info(f"全部请求完毕，等待解析进程")
+        while self.url_queue.empty() is False or self.item_queue.empty() is False or self._saving is True:
+            if self.except_queue.empty() is False:
+                except_info = self.except_queue.get()
+                self.logger = _get_logger(self.name, self.config.LOG_LEVEL)
+                self.logger.error(except_info)
+                break
+
+        self.logger.critical(f"全部解析完毕， 等待保存进程")
+        self._finish = True
+        self.logger.critical(f"合计爬取项目数： {meta['item_count']}")
+        self.logger.critical(f"合计爬取链接数：{meta['link_count']}")
+
+    class ParseThread(threading.Thread):
+        def __init__(self, name, url_queue, queueLock, get_response, parse, save, except_queue, item_queue, meta,
+                     config):
+            """
+
+            :param name:
+            :param url_queue:
+            :param queueLock:
+            :param get_response:
+            :param parse:
+            :param save:
+            :param except_queue:
+            :param item_queue:
+            :param meta:
+            :param config:
+            """
+            threading.Thread.__init__(self, target=self.run)
+            self.name = name
+            self.url_queue = url_queue
+            self.queueLock = queueLock
+            self.get_response = get_response
+            self.parse = parse
+            self.save = save
+            self.item_queue = item_queue
+            self.logger = _get_logger(self.name, config.LOG_LEVEL)
+            self.meta = meta
+
+        def run(self) -> None:
+            while True:
+                try:
+                    sleep(self.meta['download_interval'])
+                    self.queueLock.acquire()
+                    if not self.url_queue.empty():
+                        url = self.url_queue.get()
+                        self.meta['link_count'] += 1
+                    else:
+                        url = None
+                    self.queueLock.release()
+
+                    if url is None:
+                        sleep(1)
+                        continue
+                    self.logger.info(f"开始爬虫 {url}")
+                    response = self.get_response(url)
+
+                    try:
+                        item = self.parse(response)
+                    except Exception as e:
+                        self.logger.exception(e)
+                        continue
+                    self.item_queue.put(item)
+                    datetime.timedelta(1)
+                except NotImplementedError as e:
+                    self.logger.exception(e)
+                    return
+                except Exception as e:
+                    self.logger.exception(e)
+
 
 if __name__ == '__main__':
     test_spider = Spider()
