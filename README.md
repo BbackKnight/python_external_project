@@ -1,2 +1,3 @@
 # python_external_project
-other
+
+python 异步爬虫实例；
