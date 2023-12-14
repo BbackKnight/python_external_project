@@ -15,14 +15,14 @@ warnings.filterwarnings("ignore")  # 屏蔽废弃告警
 
 
 class AsyncSpider(object):
-    def __init__(self, name: str = "Simpyder", user_agent: str = f"Sompyder ver.{__VERSION__}", interval: int = 0,
-                 concurrency: int = 8, log_level: str = "INFO"):
+    def __init__(self, name: str = "Simpyder", user_agent: str = f"Simpyder ver.{__VERSION__}",
+                 interval: int = 0, concurrency: int = 8, log_level: str = "INFO"):
         """
 
         :param name:
         :param user_agent:
-        :param interval:
-        :param concurrency:
+        :param interval: 间隔
+        :param concurrency:  同时并发
         :param log_level:
         """
         self.count = 0
@@ -91,7 +91,7 @@ class AsyncSpider(object):
         return response
 
     async def gen_url(self):
-        self.except_queue.put('未实现方法： gen_url()，无法开启爬虫任务')
+        self.logger.critical('未实现方法： gen_url()，无法开启爬虫任务')
         yield None
 
     async def parse(self, response):
@@ -193,14 +193,14 @@ class AsyncSpider(object):
             await asyncio.sleep(self.interval)
 
     async def _run(self):
-        self.logger.debug(f"Spider Task Start...")
+        self.logger.info(f"Spider Task Start...")
         self.proxy = await self.proxy_gener.__anext__()
         self.url_task_queue = Queue(30)
 
         start_time = datetime.datetime.now()
         tasks = []
         print_log = asyncio.ensure_future(self._auto_print_log())
-        self.logger.debug(f"Create Crawl Tasks")
+        self.logger.info(f"Create Crawl Tasks")
         crawl_task = asyncio.ensure_future(self._run_crawler(0))
 
         await self._add_url_to_queue()
@@ -246,19 +246,28 @@ if __name__ == '__main__':
     test.concurrency = 64
     test.interval = 0
 
+
     async def g():
         for _ in range(1024):
             yield "https://www.baidu.com"
+
+
     test.gen_url = g
+
 
     async def parse(res):
         await asyncio.sleep(0.1)
         return "parsed item"
+
+
     test.parse = parse
+
 
     async def save(item):
         await asyncio.sleep(0.1)
         return 2
+
+
     test.save = save
 
     test.run()
